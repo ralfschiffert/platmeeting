@@ -30,10 +30,16 @@
 const got = require('got')
 
 // we should use oAuth mechanism
-const ADMIN_TOKEN = ""
+const ADMIN_TOKEN = "ZDYzMmU5NWItYWRiZS00Y2FmLTg2ZWUtM2VkZDk1NWE4NGNmNTc4MzZiNDgtMDFk_PF84_ce861fba-6e2f-49f9-9a84-b354008fac9e"
 
 // these people should not be in the same call
-const peopleWhoShouldNotTalk = [ "raschiff@cisco.com", "krs2@schiffert.me"]
+const peopleWhoShouldNotTalk = [ "raschiff@cisco.com", "krs3@schiffert.me"]
+
+// this is the data structure we use to store all calls in the system
+// the people itself will be stored as Sets in the map
+const calls = new Map();
+
+const person2CallMembership = new Map();
 
 // interact with the teams API via a client object
 const teams = require('ciscospark').init({
@@ -50,14 +56,25 @@ var myApp = {
   webhooks: [], // list of webhook objects so we can remove them at the end
   webhooks2Add: [],
   idsWhoShouldNotTalk: [],
+  memberships2BRemoved: [],
+  forbiddenPeopleInCall: [],
 
   init:  function() {
-    let kickoffPromise =  this.resolvePeople2Id()
-      .then( () => this.setupWebhookData())
+
+    let kickoffPromise =  this.deleteAllAccountWebhooks()
+      .then( () => this.resolvePeople2Id() )
       .then( () => this.createWebhookInbox())
       .then( (webhookinbox) => { console.log( "http://webhookinbox.com/view/" + webhookinbox.split("/").splice(-2)[0])})
+      .then( () => this.setupWebhookData())
       .then( () => this.createWebhooks())
       .then( v => {console.log(v)})
+      .then( () => {  return this.setupDelay(20) })
+      .then( () => { return this.checkWhoCalledIn()})
+      .then( () => { return this.checkForDLPDisallowed()})
+      .then(console.log)
+      .then( () => { return this.hangupOnViolators()})
+      .then( () => { return this.remindViolatorsInDirectMessage()})
+
       //this.resolvePeople2Id()
       //.then(console.log)
       //  console.log("webhookInbox at http://webhookinbox.com/view/" + inboxUrl.split("/").slice(-2)[0] + "/")
@@ -94,6 +111,19 @@ var myApp = {
      // .then( () => { return this.cleanupMeeting() })
      // .catch(console.log)
   },
+  deleteAllAccountWebhooks: function () {
+
+    return teams.webhooks.list({max: 100})
+      .then(w => w.items.map(i => {
+        return teams.webhooks.remove(i.id)
+      }))
+      .then(
+        w => {
+          return Promise.all(w)
+        })
+      .catch(console.log)
+
+  },
   setupWebhookData: function() {
 
     // webhooks
@@ -102,6 +132,7 @@ var myApp = {
       resource: "callMemberships",
       event: "created",
       filter: "status=joined",
+      targetUrl: this.webhookUrl + 'in/',
       ownedBy: "org"
     }
 
@@ -121,13 +152,7 @@ var myApp = {
 
     return Promise.all(
       this.webhooks2Add.map(i => {
-        return teams.webhooks.create({
-          name: i.name,
-          resource: i.resource,
-          event: i.event,
-          filter: i.filter,
-          targetUrl: this.webhookUrl + 'in/'
-        })
+        return teams.webhooks.create(i)
       }),
     ).then( w => this.webhooks = w ).catch(console.log)
   },
@@ -171,12 +196,6 @@ var myApp = {
       .then( a => a.map( i => { this.people2Remind.unshift(i.personId) }))
       .then( () => { return this.people2Remind })
   },
-  deleteAllAccountWebhooks: function() {
-
-      return teams.webhooks.list({max: 100})
-        .then( w => w.items.map( i => { return teams.webhooks.remove(i.id) })) //?
-
-  },
   postMessage: function(msg) {
     return teams.messages.create({roomId: this.roomId, text: msg})
   },
@@ -194,24 +213,67 @@ var myApp = {
     return teams.rooms.delete(this.roomId)
   },
   checkWhoCalledIn: function() {
-    return got(this.webhookurl+'items/').then( l => {
-      let peopleHere = []
-      let a = JSON.parse(l.body).items;
+    return got(this.webhookUrl+'items/').then( l => {
 
-      a.map( i => { peopleHere.unshift(JSON.parse(i.body).data.personId) })
+      let a = JSON.parse(l.body).items; // this is the whole result page
 
+      // let's get person by person
+      a.map( i => {
+        let result = JSON.parse(i.body)
+        let callId = result.data.callId
+        let personId = result.data.personId
+        let callMembershipId = result.data.id
+        person2CallMembership.set(personId, callMembershipId)
 
-
-      // let's remove the people that are already here from the people who need to be reminded
-      this.people2Remind = this.people2Remind.filter( p => { return peopleHere.indexOf(p) <0 })
-      console.log(this.people2Remind)
-      return(this.people2Remind)
+        // let's check if we have the callId already
+        if (calls.has(callId)) {
+          //get the set and add the person
+          calls.get(callId).add(personId) // if the personId is already there, no harm is done
+        } else {
+          calls.set(callId, new Set().add(personId)) // empty set of people
+        }
+      })
     })
   },
-  remindSlackersInDirectMessage: function(msg) {
+  checkForDLPDisallowed: function() {
+
+    // iterate over all calls
+    for (const c of calls.keys()) {
+      this.forbiddenPeopleInCall = this.idsWhoShouldNotTalk.filter(x => calls.get(c).has(x))
+
+      if ( this.forbiddenPeopleInCall.length >= 2 ) {
+        this.memberships2BRemoved.push(...this.forbiddenPeopleInCall.map( pid => person2CallMembership.get(pid)))
+      }
+    }
+
+    return this.memberships2BRemoved
+  },
+  hangupOnViolators: function() {
+
+       console.log("START")
+    console.log(this.memberships2BRemoved)
+    console.log("END")
+
+      this.memberships2BRemoved.map( i => {
+        got('https://api.ciscospark.com/v1/call/commands/hangup',
+          {
+            method: 'POST',
+            headers: {
+              'Authorization' : 'Bearer ' + ADMIN_TOKEN,
+              'Content-type' : 'application/json'
+            },
+            json: true,
+            body: {
+              "callMembershipId" : i
+            }
+          })
+          .catch(console.log)
+        })
+  },
+  remindViolatorsInDirectMessage: function() {
     return Promise.all(
-      this.people2Remind.map( i => {
-        teams.messages.create({toPersonId: i, text: msg})
+      this.forbiddenPeopleInCall.map( i => {
+        teams.messages.create({toPersonId: i, text: "Your call has ended due to a policy violation"})
       })
     )
   },
