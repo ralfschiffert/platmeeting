@@ -30,10 +30,11 @@
 const got = require('got')
 
 // we should use oAuth mechanism
-const ADMIN_TOKEN = "ZDYzMmU5NWItYWRiZS00Y2FmLTg2ZWUtM2VkZDk1NWE4NGNmNTc4MzZiNDgtMDFk_PF84_ce861fba-6e2f-49f9-9a84-b354008fac9e"
+const ADMIN_TOKEN = "NDAzM2RhMjctM2ZhZi00MjlhLWIzYzctOTkzOTZlODI3MTZkZTlhMWM4YjktMjk1_PF84_ce861fba-6e2f-49f9-9a84-b354008fac9e"
 
-// these people should not be in the same call
+// DLP POLICY - DLP POLICY - DLP POLICY
 const peopleWhoShouldNotTalk = [ "raschiff@cisco.com", "krs3@schiffert.me"]
+// DLP POLICY - DLP POLICY - DLP POLICY
 
 // this is the data structure we use to store all calls in the system
 // the people itself will be stored as Sets in the map
@@ -67,10 +68,7 @@ var myApp = {
       .then( (webhookinbox) => { console.log( "http://webhookinbox.com/view/" + webhookinbox.split("/").splice(-2)[0])})
       .then( () => this.setupWebhookData())
       .then( () => this.createWebhooks())
-      .then( v => {console.log(v)})
-      .then( () => {  return this.setupDelay(20) })
       .then( () => { return this.checkWhoCalledIn()})
-      .then( () => { return this.checkForDLPDisallowed()})
       .then(console.log)
       .then( () => { return this.hangupOnViolators()})
       .then( () => { return this.remindViolatorsInDirectMessage()})
@@ -213,28 +211,48 @@ var myApp = {
     return teams.rooms.delete(this.roomId)
   },
   checkWhoCalledIn: function() {
-    return got(this.webhookUrl+'items/').then( l => {
 
-      let a = JSON.parse(l.body).items; // this is the whole result page
 
-      // let's get person by person
-      a.map( i => {
-        let result = JSON.parse(i.body)
-        let callId = result.data.callId
-        let personId = result.data.personId
-        let callMembershipId = result.data.id
-        person2CallMembership.set(personId, callMembershipId)
+    return new Promise( (res,rej) => {
 
-        // let's check if we have the callId already
-        if (calls.has(callId)) {
-          //get the set and add the person
-          calls.get(callId).add(personId) // if the personId is already there, no harm is done
-        } else {
-          calls.set(callId, new Set().add(personId)) // empty set of people
+      var intv = setInterval( () => {
+
+        got(this.webhookUrl+'items/').then( l => {
+
+          let a = JSON.parse(l.body).items; // this is the whole result page
+
+          // let's get person by person
+          a.map( i => {
+            let result = JSON.parse(i.body)
+            let callId = result.data.callId
+            let personId = result.data.personId
+            let callMembershipId = result.data.id
+            person2CallMembership.set(personId, callMembershipId)
+
+            // let's check if we have the callId already
+            if (calls.has(callId)) {
+              //get the set and add the person
+              calls.get(callId).add(personId) // if the personId is already there, no harm is done
+            } else {
+              calls.set(callId, new Set().add(personId)) // empty set of people
+            }
+          })
+      }).catch(console.log)
+
+
+        // iterate over all calls
+        for (const c of calls.keys()) {
+          this.forbiddenPeopleInCall = this.idsWhoShouldNotTalk.filter(x => calls.get(c).has(x))
+
+          if ( this.forbiddenPeopleInCall.length >= 2 ) {
+            this.memberships2BRemoved.push(...this.forbiddenPeopleInCall.map( pid => person2CallMembership.get(pid)))
+            clearInterval(intv)
+            res(this.memberships2BRemoved)
+          }
         }
-      })
-    })
-  },
+    },5000)
+  })
+},
   checkForDLPDisallowed: function() {
 
     // iterate over all calls
