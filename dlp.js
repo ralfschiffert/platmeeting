@@ -250,9 +250,7 @@ var myApp = {
   },
   hangupOnViolators: function() {
 
-       console.log("START")
-    console.log(this.memberships2BRemoved)
-    console.log("END")
+      let peopleWhoGotHungUp = []
 
       this.memberships2BRemoved.map( i => {
         got('https://api.ciscospark.com/v1/call/commands/hangup',
@@ -271,11 +269,16 @@ var myApp = {
         })
   },
   remindViolatorsInDirectMessage: function() {
-    return Promise.all(
-      this.forbiddenPeopleInCall.map( i => {
-        teams.messages.create({toPersonId: i, text: "Your call has ended due to a policy violation"})
-      })
-    )
+
+    if ( this.forbiddenPeopleInCall.length < 2 ) {
+      return Promise.resolve()
+    } else {
+      return Promise.all(
+        this.forbiddenPeopleInCall.map(i => {
+          teams.messages.create({toPersonId: i, text: "Your call has ended due to a policy violation"})
+        })
+      )
+    }
   },
   cleanupMeeting: function() {
     return twilio.calls(this.twilioCallSid).update({status: 'completed'})
