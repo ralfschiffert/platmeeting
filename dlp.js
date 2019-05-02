@@ -37,7 +37,6 @@ const ts1 = ts.parse('body')
 // the first step does as a side effect remove the escaped quotes
 const ts2 = ts.parse('data')
 
-
 // interact with the teams API via a client object
 const teams = require('ciscospark').init({
   credentials: {
@@ -61,11 +60,10 @@ var myApp = {
   // list of webhook ids so we can remove them at the end
   webhooks: [],
   // id's of people who should not talk
-  idsWhoShouldNotTalk: [],
+  personIdsWhoShouldNotTalk: [],
   // violating memberships
   memberships2BRemoved: new Set(),
 
-  forbiddenPeopleInCall: [],
   // this is the data structure we use to store all calls in the system
   // the people itself will be stored as Sets in the map
   // MapEntry -> SetOfCallMemberships
@@ -85,49 +83,14 @@ var myApp = {
       .then((webhookinbox) => {
         console.log("http://webhookinbox.com/view/" + webhookinbox.split("/").splice(-2)[0])
       })
-      .then( () => this.refreshWebhookInboxRegularly() )
+      .then(() => this.refreshWebhookInboxRegularly())
       .then(() => this.createWebhooks())
       .then(() => {
         return this.checkWhoCalledInAndHangup()
       })
-    //.then( () => { return this.remindViolatorsInDirectMessage()})
-
-    //this.resolvePeople2Id()
-    //.then(console.log)
-    //  console.log("webhookInbox at http://webhookinbox.com/view/" + inboxUrl.split("/").slice(-2)[0] + "/")
-    //.then(this.createWebhookInbox())
-    //.then(this.webhookInboxUrl)
-    //.then(this.createWebhooks())
-    //.catch(console.log)
-    // authorizes the client and stores access in the teams object so we never have to explicitly authenticate
-    // let kickoffPromise = teams.authorization.requestAccessTokenFromJwt({jwt: guestToken})
-    // webhookinbox is a 3rd party website - the only reason I am using it so I don't have to run a server
-    // locally, which some companies don't allow
-    // instead I am creating a way to deposit a webhook on this site and then poll the site for who joined
-    //    .then( () => { return this.createWebhookInbox() })
-    // we convert email addresses to id's since it makes it easier to track who joined the meeting
-    // the webhooks are keyed in personId's, not emails
-    //  .then( () => { return this.resolvePeople2Id() })
-    //.then( () => { return this.createSpace() })
-    // when creating a room it doesn't give us back the room details
-    // instead we need to query the room to get these details
-    // .then( () => { return this.lookupSpaceDetails() })
-    // now we can add the people to the space
-    //.then( () => { return this.addMembersById2Space() })
-    // now we register for each member a webhook which fires for when they are joined to the meeting
-    // .then( () => { return this.createWebhooks() })
-    // .then( () => { return this.postMessage("Welcome to the " + this.roomTitle + " huddle space") })
-    // .then( () => { return this.callSpace() })
-    // let's give people a couple of seconds to join
-    // .then( () => {  return this.setupDelay(20) })
-    // .then( () => { return this.checkWhoCalledInAndHangup() })
-    // .then( () => { return this.remindSlackersInDirectMessage("Hey, can you join our call in the " +
-    // this.roomTitle + " space") })
-    // .then( () => {  return this.setupDelay(20) })
-    // let's clean  up
-    // .then( () => { return this.cleanupMeeting() })
-    // .catch(console.log)
+      .catch(console.log)
   },
+
   deleteAllAccountWebhooks: function () {
 
     // removes all webhooks registered by the account token
@@ -141,6 +104,7 @@ var myApp = {
         })
       .catch(console.log)
   },
+
   setupWebhookData: function () {
 
     // previously I had this as a promise based function
@@ -160,17 +124,16 @@ var myApp = {
     // technically speaking it is not necessary to setup the person filter here but it makes the code simpler
     // and more efficient hopefully. If we wanted to control dynamically which people must not talk we could
     // omit the person filter and rather check each incoming callMembership webhook
-    if (!this.idsWhoShouldNotTalk || this.idsWhoShouldNotTalk.length == 0) {
+    if (!this.personIdsWhoShouldNotTalk || this.personIdsWhoShouldNotTalk.length == 0) {
       // we need the people ID's
       // return Promise.reject("need to call resolvePeople2Id before calling setupWebhookData")
       throw new Error('need to call resolvePeople2Id before calling setupWebhookData')
     }
 
-    let webhookSet = this.idsWhoShouldNotTalk.map(i => {
+    let webhookSet = this.personIdsWhoShouldNotTalk.map(i => {
       return Object.assign({}, wh1, {filter: `${wh1.filter}&personId=${i}`})
     })
     let wh2 = Object.assign({}, wh1, {event: "updated"})
-
 
     const whCallEnded = {
       name: "callEnded",
@@ -185,7 +148,7 @@ var myApp = {
 
     // the spread operator splits the array into its constituents
     // otherwise we would have an array in an array
-    webhookSet.push(...this.idsWhoShouldNotTalk.map(i => {
+    webhookSet.push(...this.personIdsWhoShouldNotTalk.map(i => {
       return Object.assign({}, wh2, {filter: `${wh2.filter}&personId=${i}`})
     }))
 
@@ -219,7 +182,11 @@ var myApp = {
     // the way around this is to call /refresh/ in regular intervals
     let url = this.webhookInboxUrl + 'refresh/'
 
-    setInterval( () => { got(url, { 'method':'POST' }).then( () => { console.log("inbox refreshed") }).catch(console.log) }, 60 * 1000 )
+    setInterval(() => {
+      got(url, {'method': 'POST'}).then(() => {
+        console.log("inbox refreshed")
+      }).catch(console.log)
+    }, 60 * 1000)
 
     return Promise.resolve()
   },
@@ -230,78 +197,13 @@ var myApp = {
       disallowedPeopleArray.map(i =>
         teams.people.list({email: i}).then(p => p.items[0].id)))
       .then(a => {
-        return this.idsWhoShouldNotTalk = a
+        return this.personIdsWhoShouldNotTalk = a
       })
-  },
-  createSpace: function () {
-    return teams.rooms.create({title: this.roomTitle}).then(r => {
-      return this.roomId = r.id
-    })
-  },
-  lookupSpaceDetails: function () {
-    // we need to do thjs to access the SIP URI of this space, which is not returned in the room creation
-    return teams.rooms.get(this.roomId).then(r => {
-      return this.roomSipUri = r.sipAddress
-    })
-  },
-  addMembersByEmail2Space: function (people) {
-    return Promise.all(
-      people.map((m) => {
-        return teams.memberships.create({roomId: this.roomId, personEmail: m})
-      }))
-  },
-  addMembersById2Space: function () {
-    return Promise.all(
-      this.people2AddIds.map(id => {
-        return teams.memberships.create({roomId: this.roomId, personId: id})
-      })
-    )
-      .then(a => a.map(i => {
-        this.people2Remind.unshift(i.personId)
-      }))
-      .then(() => {
-        return this.people2Remind
-      })
-  },
-  postMessage: function (msg) {
-    return teams.messages.create({roomId: this.roomId, text: msg})
-  },
-  setupDelay: function (time) {
-    let timeMs = time * 1000
-    // some helper function that helps us wait before we poll who joined
-    return new Promise(res => {
-      setTimeout(() => {
-        res(timeMs)
-      }, timeMs)
-    })
-  },
-  removeSpace: function () {
-    // when the call is done we should remove the space
-    // this will delete all memberships in the space as well
-    // all ongoing calls will be deleted as well
-    return teams.rooms.delete(this.roomId)
-  },
-  checkForPolicyViolation() {
-
-    // now where we have modified our array with new callMemberships we should check if there is any violation
-    // going on
-    for (const c of this.calls.keys()) {
-      this.forbiddenPeopleInCall = this.idsWhoShouldNotTalk.filter(x => calls.get(c).has(x))
-
-      // in this call are 2 or more people who should not talk
-      if (this.forbiddenPeopleInCall.length >= 2) {
-        this.memberships2BRemoved.add(...this.forbiddenPeopleInCall.map(pid => person2CallMembership.get(pid)))
-
-        return this.memberships2BRemoved
-      }
-    }
-
   },
   // this is the easier way to do it. the stream produces when a new item arrives
   checkWhoCalledInAndHangup: function () {
 
     let url = this.webhookInboxUrl + 'stream/'
-    let attendees = []
     let self = this
 
     // when the stream is opened it comes back with the message '[opened]\n' which we don't want to parse
@@ -309,61 +211,87 @@ var myApp = {
       return x.toString('utf-8').replace('[opened]\n', '')
     }).pipe(ts1).pipe(ts2).on('data', function handleDataRecord(data) {
 
-      console.log('in data section')
-      console.log(data)
 
-      let callId = data.callId
-      let personId = data.personId
-      let callMembershipId = data.id
+      if (data.status && data.status == "disconnected") {
+        // this is a call ended notification
 
-      // map between personId and callMembershipId
-      self.person2CallMembership.set(personId, callMembershipId)
+        // for call membership there is a left, not a disconnected
+
+        // we first remove the call memberships from the array memberships2BRemoved and then we remove the call itself
+        // this is needed since we don't have the rights to hanghup on all memberships and they would aggregate
+        // alternative we could register another webhook for the membership left and remove that one
+        // this is a little trickier since the membershipID is not unique within a call
+        // for example if I join a meeting - drop and rejoin I am getting the same membership ID
+        let setOfMemberships2BRemoved = self.calls.get(data.callId)
+
+        console.log('call ended memberships2BRemoved')
+        console.log(setOfMemberships2BRemoved)
+
+        if (setOfMemberships2BRemoved) {
+          // we remove the callMemberships asscoiated with this call from the ones we needed to remove
+          let tmp = [...self.memberships2BRemoved].filter(x => !setOfMemberships2BRemoved.has(x))
+          self.memberships2BRemoved = new Set(tmp)
+
+          self.calls.delete(data.callId)
+          console.log('call ' + +' has ended')
+        }
+      } else if (self.personIdsWhoShouldNotTalk.includes(data.personId)) {
+            // this is a callMembership notification for a person of interest
+
+            let callId = data.callId
+            let callMembershipId = data.id
+            let status = data.status
+            let personId = data.personId
 
 
-      // let's check if we have the callId already
-      if (self.calls.has(callId)) {
-        //get the set and add the person
-        self.calls.get(callId).add(personId) // if the personId is already there, no harm is done - this is a set
-      } else {
-        self.calls.set(callId, new Set().add(personId)) // empty set of people
-      }
+            self.person2CallMembership.set(personId, callMembershipId) // a new call membership will overwrite an
+        // old one
 
-      console.log(chalk.green('membershipID'), data.id)
-      console.log(chalk.green('callId'), data.callId)
-      console.log(chalk.green('personId'), data.personId)
-      console.log(chalk.green('status'), data.status)
+            console.log('callid', chalk.green(callId))
+            console.log('personId', chalk.green(data.personId))
+            console.log('callMembershipId', chalk.green(callMembershipId))
+            console.log('status', chalk.green(status))
 
-      if (self.checkForDLPDisallowed().size > 1) {
-        self.hangupOnViolators().then((v) => {
-          console.log('http' + v)
-        }).catch(console.log)
-      }
+
+            // let's check if we have the callId already
+            if (self.calls.has(callId)) {
+              //get the set and add the person
+              self.calls.get(callId).add(callMembershipId) // if the personId is already there, no harm is done - this is
+              // a set
+            } else {
+              self.calls.set(callId, new Set().add(callMembershipId)) // empty set of people
+            }
+          }
+
+
+        if (self.checkForDLPDisallowed().size > 1) {
+          self.hangupOnViolators().then((v) => {
+            console.log('http' + v)
+          }).catch(console.log)
+        }
     }).on('end', function handleEnd() {
       console.log(chalk.green("stream closed"))
     })
-    // filter doesn't work since the [opened] comes with the JSON object
-    //  highland(got.stream(url)).filter(e => console.log(":-:" + e + ":-:")).pipe(process.stdout)
-
   },
   checkForDLPDisallowed: function () {
 
-    console.log(1)
-
+    // we don't need this elaborate filtering and checking anymore since we already put only people into the set
+    // that should not talk - so we can just check if there is more than 1 person in this call and need to hangup
     // iterate over all calls
-    for (const c of this.calls.keys()) {
-
-      console.log(2)
-
-      this.forbiddenPeopleInCall = this.idsWhoShouldNotTalk.filter(x => this.calls.get(c).has(x))
-
-      console.log(this.forbiddenPeopleInCall)
-      console.log(3)
-
-      if (this.forbiddenPeopleInCall.length >= 2) {
-
-        let tmpArr = this.forbiddenPeopleInCall.map(pid => this.person2CallMembership.get(pid))
-        console.log(tmpArr)
-        tmpArr.forEach(e => this.memberships2BRemoved.add(e))
+    //for (const c of this.calls.keys()) {
+    //
+    //  this.forbiddenPeopleInCall = this.personIdsWhoShouldNotTalk.filter(x => this.calls.get(c).has(x))
+    //
+    //  if (this.forbiddenPeopleInCall.length >= 2) {
+    //
+    //    let tmpArr = this.forbiddenPeopleInCall.map(pid => this.person2CallMembership.get(pid))
+    //    tmpArr.forEach(e => this.memberships2BRemoved.add(e))
+    //  }
+    //}
+    for ( let cm  of this.calls.values() ) {
+      if ( cm.size > 1 ) {
+        // 2 or more forbidden people in same call
+        this.memberships2BRemoved = new Set([...this.memberships2BRemoved, ...cm])
         console.log(this.memberships2BRemoved)
       }
     }
@@ -371,11 +299,6 @@ var myApp = {
     return this.memberships2BRemoved
   },
   hangupOnViolators: function () {
-
-    console.log("START THIS MEMBERSHIPS 2B REMOVED")
-    console.log(this.memberships2BRemoved)
-    console.log("END")
-
 
     return Promise.all(
       // map doesn't work with sets
@@ -397,12 +320,13 @@ var myApp = {
           })
           .then(() => {
             console.log('did hangup on ' + i + ' successfully')
-            let tmp = this.memberships2BRemoved.filter(x => x != i)
-            this.memberships2BRemoved = tmp
-
-            console.log("tts " +  this.memberships2BRemoved)
-
-            // return this.remindViolatorsInDirectMessage(i)
+            try {
+              let tmp = [...this.memberships2BRemoved].filter(x => x != i)
+              this.memberships2BRemoved = new Set(tmp)
+            } catch ( e ) {
+              console.log(e)
+            }
+            return this.remindViolatorsInDirectMessage(i)
           })
           .catch(() => {
             console.log("could not hangup on membershipId " + i)
@@ -412,23 +336,16 @@ var myApp = {
   },
   remindViolatorsInDirectMessage: function (membershipId) {
     // reverse mapping to personId
+    console.log('RALF4')
+    console.log("remind violators in direct message")
     for (const [k, v] of this.person2CallMembership) {
       if (v == membershipId) {
+        console.log('personId ' + k )
         return teams.messages.create({toPersonId: k, text: "Your call has ended due to a policy violation"})
       }
     }
-  },
-  cleanupMeeting: function () {
-    return twilio.calls(this.twilioCallSid).update({status: 'completed'})
-      .then(() => {
-        return teams.rooms.remove(this.roomId)
-      })
-      .then(() => {
-        return Promise.all(
-          this.webhooks.map(w => teams.webhooks.remove(w))
-        )
-      })
   }
 }
+
 
 myApp.init(peopleWhoShouldNotTalk)
