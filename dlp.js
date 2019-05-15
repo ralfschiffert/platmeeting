@@ -37,25 +37,26 @@ const ts1 = ts.parse('body')
 // the first step does as a side effect remove the escaped quotes
 const ts2 = ts.parse('data')
 
-// interact with the teams API via a client object
-const teams = require('ciscospark').init({
-  credentials: {
-    // for purposes of this program - to see any calls that happen in the org - this needs to be a token with the
-    // scopes spark-admin:calls_read and spark-admin:call_memberships_read
-    access_token: process.env.ADMIN_TOKEN
-  }
+// launch chrome with the webhookinbox
+const exec = require('child_process').exec
+
+const readline = require('readline').createInterface({
+  input: process.stdin,
+  output: process.stdout
 })
+
 
 
 // DLP POLICY - DLP POLICY - DLP POLICY
 // This is our 1 line DLP policy - members in this array should not be in the same call - easy
-const peopleWhoShouldNotTalk = ["raschiff@cisco.com", "krs3@schiffert.me"]
+const peopleWhoShouldNotTalk = []
 // DLP POLICY - DLP POLICY - DLP POLICY
 
 
 var myApp = {
   // webhookinbox 3rd party server to receive our webhooks on who joined - that's convenient since we
   // don't need to use ngrok or a public server
+  token: "",
   webhookInboxUrl: "",
   // list of webhook ids so we can remove them at the end
   webhooks: [],
@@ -63,6 +64,7 @@ var myApp = {
   personIdsWhoShouldNotTalk: [],
   // violating memberships
   memberships2BRemoved: new Set(),
+  teams: {},
 
   // this is the data structure we use to store all calls in the system
   // the people itself will be stored as Sets in the map
@@ -74,6 +76,16 @@ var myApp = {
   // it would not work though if the person would join 2 different calls at the same time
   person2CallMembership: new Map(),
 
+  setup: function(token, arrayOfPeopleWhoShouldNotTalk) {
+    this.token = token
+    this.teams = require('ciscospark').init({
+      credentials: {
+        // for purposes of this program - to see any calls that happen in the org - this needs to be a token with the
+        // scopes spark-admin:calls_read and spark-admin:call_memberships_read
+        access_token: token
+      }
+    })
+  },
   init: function (emailsThatShouldNotTalk) {
 
     let kickoffPromise = this.deleteAllAccountWebhooks()
@@ -81,7 +93,14 @@ var myApp = {
       .then(() => this.createWebhookInbox())
       // the view URL is different from the API endpoint to insert events
       .then((webhookinbox) => {
-        console.log("http://webhookinbox.com/view/" + webhookinbox.split("/").splice(-2)[0])
+        let viewUrl = "http://webhookinbox.com/view/" + webhookinbox.split("/").splice(-2)[0]
+        // console.log(viewUrl)
+        exec(`/usr/bin/open -a "/Applications/Google Chrome.app" ${viewUrl}`, err => {
+          if ( err ) {
+            console.log('error when trying to launch webhookinbox in browser')
+            console.log(err)
+          }
+        })
       })
       .then(() => this.refreshWebhookInboxRegularly())
       .then(() => this.createWebhooks())
@@ -94,9 +113,9 @@ var myApp = {
   deleteAllAccountWebhooks: function () {
 
     // removes all webhooks registered by the account token
-    return teams.webhooks.list({max: 100})
+    return this.teams.webhooks.list({max: 100})
       .then(w => w.items.map(i => {
-        return teams.webhooks.remove(i.id)
+        return this.teams.webhooks.remove(i.id)
       }))
       .then(
         v => {
@@ -162,7 +181,7 @@ var myApp = {
     // to point the Teams API to the webhookinbox URL
     return Promise.all(
       this.setupWebhookData().map(i => {
-        return teams.webhooks.create(i)
+        return this.teams.webhooks.create(i)
       }),
     ).then(w => this.webhooks = w).catch(console.log)
   },
@@ -184,7 +203,7 @@ var myApp = {
 
     setInterval(() => {
       got(url, {'method': 'POST'}).then(() => {
-        console.log("inbox refreshed")
+        // console.log("inbox refreshed")
       }).catch(console.log)
     }, 60 * 1000)
 
@@ -195,7 +214,7 @@ var myApp = {
     // which we setup as email addresses while internally mos API calls work with ID's
     return Promise.all(
       disallowedPeopleArray.map(i =>
-        teams.people.list({email: i}).then(p => p.items[0].id)))
+        this.teams.people.list({email: i}).then(p => p.items[0].id)))
       .then(a => {
         return this.personIdsWhoShouldNotTalk = a
       })
@@ -224,8 +243,8 @@ var myApp = {
         // for example if I join a meeting - drop and rejoin I am getting the same membership ID
         let setOfMemberships2BRemoved = self.calls.get(data.callId)
 
-        console.log('call ended memberships2BRemoved')
-        console.log(setOfMemberships2BRemoved)
+        // console.log('call ended memberships2BRemoved')
+        // console.log(setOfMemberships2BRemoved)
 
         if (setOfMemberships2BRemoved) {
           // we remove the callMemberships asscoiated with this call from the ones we needed to remove
@@ -233,7 +252,7 @@ var myApp = {
           self.memberships2BRemoved = new Set(tmp)
 
           self.calls.delete(data.callId)
-          console.log('call ' + +' has ended')
+          // console.log('call ' + +' has ended')
         }
       } else if (self.personIdsWhoShouldNotTalk.includes(data.personId)) {
             // this is a callMembership notification for a person of interest
@@ -247,10 +266,10 @@ var myApp = {
             self.person2CallMembership.set(personId, callMembershipId) // a new call membership will overwrite an
         // old one
 
-            console.log('callid', chalk.green(callId))
-            console.log('personId', chalk.green(data.personId))
-            console.log('callMembershipId', chalk.green(callMembershipId))
-            console.log('status', chalk.green(status))
+            // console.log('callid', chalk.green(callId))
+            // console.log('personId', chalk.green(data.personId))
+            // console.log('callMembershipId', chalk.green(callMembershipId))
+            // console.log('status', chalk.green(status))
 
 
             // let's check if we have the callId already
@@ -265,12 +284,18 @@ var myApp = {
 
 
         if (self.checkForDLPDisallowed().size > 1) {
-          self.hangupOnViolators().then((v) => {
-            console.log('http' + v)
-          }).catch(console.log)
+          self.askAdminToHangup().then( a => {
+            if ( a == 'y' || a == 'Y' || a == 'yes' ) {
+              // console.log('hanging up on violators')
+              self.hangupOnViolators().then((v) => {
+                // console.log('http' + v)
+              }).catch(console.log)
+            }
+          })
+
         }
     }).on('end', function handleEnd() {
-      console.log(chalk.green("stream closed"))
+      console.log(chalk.red("stream closed"))
     })
   },
   checkForDLPDisallowed: function () {
@@ -292,11 +317,20 @@ var myApp = {
       if ( cm.size > 1 ) {
         // 2 or more forbidden people in same call
         this.memberships2BRemoved = new Set([...this.memberships2BRemoved, ...cm])
-        console.log(this.memberships2BRemoved)
+        console.log(chalk.red('the following call memberships violate policies'))
+        console.log(chalk.red(JSON.stringify(this.memberships2BRemoved)))
       }
     }
 
     return this.memberships2BRemoved
+  },
+  askAdminToHangup: function() {
+
+    return new Promise( res => {
+      readline.question('Do you want to hangup on the violators?', c => {
+          res(c)
+        })
+    })
   },
   hangupOnViolators: function () {
 
@@ -310,7 +344,7 @@ var myApp = {
           {
             method: 'POST',
             headers: {
-              'Authorization': 'Bearer ' + process.env.ADMIN_TOKEN,
+              'Authorization': 'Bearer ' + this.token,
               'Content-type': 'application/json'
             },
             json: true,
@@ -319,7 +353,7 @@ var myApp = {
             }
           })
           .then(() => {
-            console.log('did hangup on ' + i + ' successfully')
+            console.log(chalk.green('did hangup on ' + i + ' successfully'))
             try {
               let tmp = [...this.memberships2BRemoved].filter(x => x != i)
               this.memberships2BRemoved = new Set(tmp)
@@ -329,23 +363,36 @@ var myApp = {
             return this.remindViolatorsInDirectMessage(i)
           })
           .catch(() => {
-            console.log("could not hangup on membershipId " + i)
+            console.log(chalk.grey("could not hangup on membershipId " + i))
           })
       })
     )
   },
   remindViolatorsInDirectMessage: function (membershipId) {
     // reverse mapping to personId
-    console.log('RALF4')
-    console.log("remind violators in direct message")
+    // console.log("remind violators in direct message")
     for (const [k, v] of this.person2CallMembership) {
       if (v == membershipId) {
-        console.log('personId ' + k )
-        return teams.messages.create({toPersonId: k, text: "Your call has ended due to a policy violation"})
+        // console.log('personId ' + k )
+        return this.teams.messages.create({toPersonId: k, text: "Your call has ended due to a policy violation"})
       }
     }
   }
 }
 
 
-myApp.init(peopleWhoShouldNotTalk)
+if ( process.argv.length < 5 ) {
+  console.log('You need to call this program like this')
+  console.log('node dlp.js token email1 email2 [ email3 ] [email4]')
+  console.log('where token an API token from an admin to have org wide visibility')
+  console.log('where emailN are the email of people that should not tallk in a call')
+  process.exit
+} else {
+  myApp.setup(process.argv[2])
+  let p = []
+
+  for ( let i = 3; i< process.argv.length; i++ ) {
+    p.push(process.argv[i])
+  }
+  myApp.init(p)
+}
